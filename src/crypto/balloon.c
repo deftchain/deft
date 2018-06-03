@@ -18,19 +18,21 @@ static void balloon_init (struct balloon_options *opts, int64_t s_cost, int32_t 
   opts->t_cost = t_cost;
 }
 
+void balloon_128 (unsigned char *input, unsigned char *output) {
+  balloon (input, output, 80, 128, 4);
+}
+
 void balloon_hash (unsigned char *input, unsigned char *output, int64_t s_cost, int32_t t_cost) {
   balloon (input, output, 80, s_cost, t_cost);
 }
 
 void balloon (unsigned char *input, unsigned char *output, int32_t len, int64_t s_cost, int32_t t_cost) {
-  int32_t mixround;
   struct balloon_options opts;
   struct hash_state s;
   balloon_init (&opts, s_cost, t_cost);
   hash_state_init (&s, &opts, input);
   hash_state_fill (&s, input, input, len);
-  for (mixround=0; mixround < t_cost; mixround++)
-      hash_state_mix (&s);
+  hash_state_mix (&s, t_cost);
   hash_state_extract (&s, output);
   hash_state_free (&s);
 }
@@ -38,7 +40,12 @@ void balloon (unsigned char *input, unsigned char *output, int32_t len, int64_t 
 int bitstream_init (struct bitstream *b) {
   SHA256_Init(&b->c);
   b->initialized = false;
+#if   OPENSSL_VERSION_NUMBER >= 0x10100000L
+  b->ctx = EVP_CIPHER_CTX_new();
+  EVP_CIPHER_CTX_init(b->ctx);
+#else
   EVP_CIPHER_CTX_init (&b->ctx);
+#endif
   b->zeros = malloc (BITSTREAM_BUF_SIZE * sizeof (uint8_t));
   memset (b->zeros, 0, BITSTREAM_BUF_SIZE);
 }
@@ -46,15 +53,15 @@ int bitstream_init (struct bitstream *b) {
 int bitstream_free (struct bitstream *b) {
   uint8_t out[AES_BLOCK_SIZE];
   int outl;
+#if   OPENSSL_VERSION_NUMBER >= 0x10100000L
+  EVP_EncryptFinal (b->ctx, out, &outl);
+  EVP_CIPHER_CTX_cleanup (b->ctx);
+  EVP_CIPHER_CTX_free(b->ctx);
+#else
   EVP_EncryptFinal (&b->ctx, out, &outl);
   EVP_CIPHER_CTX_cleanup (&b->ctx);
+#endif
   free (b->zeros);
-}
-
-int bitstream_init_with_seed (struct bitstream *b, const void *seed, size_t seedlen) {
-  bitstream_init (b);
-  bitstream_seed_add (b, seed, seedlen);
-  bitstream_seed_finalize (b);
 }
 
 int bitstream_seed_add (struct bitstream *b, const void *seed, size_t seedlen) {
@@ -66,14 +73,23 @@ int bitstream_seed_finalize (struct bitstream *b) {
   SHA256_Final (key_bytes, &b->c);
   uint8_t iv[AES_BLOCK_SIZE];
   memset (iv, 0, AES_BLOCK_SIZE);
+#if   OPENSSL_VERSION_NUMBER >= 0x10100000L
+  EVP_CIPHER_CTX_set_padding (b->ctx, 1);
+  EVP_EncryptInit (b->ctx, EVP_aes_128_ctr (), key_bytes, iv);
+#else
   EVP_CIPHER_CTX_set_padding (&b->ctx, 1);
   EVP_EncryptInit (&b->ctx, EVP_aes_128_ctr (), key_bytes, iv);
+#endif
   b->initialized = true;
 }
 
 static int encrypt_partial (struct bitstream *b, void *outp, int to_encrypt) {
   int encl;
+#if   OPENSSL_VERSION_NUMBER >= 0x10100000L
+  EVP_EncryptUpdate (b->ctx, outp, &encl, b->zeros, to_encrypt);
+#else
   EVP_EncryptUpdate (&b->ctx, outp, &encl, b->zeros, to_encrypt);
+#endif
 }
 
 int bitstream_fill_buffer (struct bitstream *b, void *out, size_t outlen) {
@@ -83,13 +99,6 @@ int bitstream_fill_buffer (struct bitstream *b, void *out, size_t outlen) {
     encrypt_partial (b, out + total, to_encrypt);
     total += to_encrypt;
   }
-}
-
-int bitstream_rand_uint64 (struct bitstream *b, uint64_t *out) {
-  const int n_bytes = 8;
-  uint8_t buf[n_bytes];
-  bitstream_fill_buffer (b, buf, n_bytes);
-  *out = bytes_to_littleend_uint64 (buf, n_bytes);
 }
 
 int compressb (uint64_t *counter, uint8_t *out, const uint8_t *blocks[], size_t blocks_to_comp) {
@@ -123,12 +132,6 @@ uint64_t bytes_to_littleend_uint64 (const uint8_t *bytes, size_t n_bytes) {
     out <<= 8;
     out |= bytes[i];
   }
-  return out;
-}
-
-uint32_t bytes_to_littleend_uint32 (const uint8_t *bytes, size_t n_bytes) {
-  uint64_t out_big = bytes_to_littleend_uint64 (bytes, n_bytes); 
-  uint32_t out = out_big & 0xFFFFFFFF;
   return out;
 }
 
@@ -180,23 +183,28 @@ int hash_state_fill (struct hash_state *s, const uint8_t salt[SALT_LEN], const u
   expand (&s->counter, s->buffer, s->n_blocks);
 }
 
-int hash_state_mix (struct hash_state *s) {
+int hash_state_mix (struct hash_state *s, int32_t mixrounds) {
   size_t i, n;
+  int32_t rounds;
+  uint8_t buf[8];
   uint64_t neighbor;
-  for (i = 0; i < s->n_blocks; i++) {
+  for (rounds=0; rounds < mixrounds; rounds++) {
+   for (i = 0; i < s->n_blocks; i++) {
     uint8_t *cur_block = block_index (s, i);
     const size_t n_blocks_to_hash = 3;
     const uint8_t *blocks[2+n_blocks_to_hash];
     const uint8_t *prev_block = i ? cur_block - BLOCK_SIZE : block_last (s);
     blocks[0] = prev_block;
     blocks[1] = cur_block;
-    for (n = 2; n < 2+n_blocks_to_hash; n++) { 
-      bitstream_rand_uint64 (&s->bstream, &neighbor);
+    for (n = 2; n < 2+n_blocks_to_hash; n++) {
+      bitstream_fill_buffer (&s->bstream, buf, 8);
+      neighbor = bytes_to_littleend_uint64 (buf, 8);
       blocks[n] = block_index (s, neighbor % s->n_blocks);
     }
     compressb (&s->counter, cur_block, blocks, 2+n_blocks_to_hash);
+   }
+   s->has_mixed = true;
   }
-  s->has_mixed = true;
 }
 
 int hash_state_extract (const struct hash_state *s, uint8_t out[BLOCK_SIZE]) {
