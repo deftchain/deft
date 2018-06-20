@@ -1,8 +1,8 @@
 #include <stdbool.h>
 #include <stdint.h>
-#include <openssl/aes.h>
-#include <openssl/evp.h>
 #include <openssl/sha.h>
+#include "balloon-aes.h"
+#include "balloon-evp.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -24,11 +24,7 @@ struct bitstream {
   bool initialized;
   uint8_t *zeros;
   SHA256_CTX c;
-#if   OPENSSL_VERSION_NUMBER >= 0x10100000L
-  EVP_CIPHER_CTX* ctx;
-#else
   EVP_CIPHER_CTX ctx;
-#endif
 };
 
 struct hash_state;
@@ -42,31 +38,12 @@ struct hash_state {
   const struct balloon_options *opts;
 };
 
-struct balloon_options {
-  int64_t s_cost;
-  int32_t t_cost;
-};
-
-void balloon_128 (unsigned char *input, unsigned char *output);
-void balloon_hash (unsigned char *input, unsigned char *output, int64_t s_cost, int32_t t_cost);
-void balloon (unsigned char *input, unsigned char *output, int32_t len, int64_t s_cost, int32_t t_cost);
-
-int bitstream_init (struct bitstream *b);
-int bitstream_free (struct bitstream *b);
-int bitstream_seed_add (struct bitstream *b, const void *seed, size_t seedlen);
-int bitstream_seed_finalize (struct bitstream *b);
-int bitstream_fill_buffer (struct bitstream *b, void *out, size_t outlen);
-int bitstream_rand_byte (struct bitstream *b, uint8_t *out);
-int compressb (uint64_t *counter, uint8_t *out, const uint8_t *blocks[], size_t blocks_to_comp);
-int expand (uint64_t *counter, uint8_t *buf, size_t blocks_in_buf);
-uint64_t bytes_to_littleend_uint64 (const uint8_t *bytes, size_t n_bytes);
-int hash_state_init (struct hash_state *s, const struct balloon_options *opts, const uint8_t salt[SALT_LEN]);
-int hash_state_free (struct hash_state *s);
-int hash_state_fill (struct hash_state *s, const uint8_t salt[SALT_LEN], const uint8_t *in, size_t inlen);
-int hash_state_mix (struct hash_state *s, int32_t mixrounds);
-int hash_state_extract (const struct hash_state *s, uint8_t out[BLOCK_SIZE]);
-void * block_index (const struct hash_state *s, size_t i); 
-void * block_last (const struct hash_state *s);
+void balloon_hash (const void* input, void* output);
+void hash_state_init (struct hash_state *s, const struct balloon_options *opts, const uint8_t salt[SALT_LEN]);
+void hash_state_free (struct hash_state *s);
+void hash_state_fill (struct hash_state *s, const uint8_t *in, size_t inlen);
+void hash_state_mix (struct hash_state *s);
+void hash_state_extract (const struct hash_state *s, uint8_t out[BLOCK_SIZE]);
 
 #ifdef __cplusplus
 }

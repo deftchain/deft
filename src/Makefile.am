@@ -251,6 +251,10 @@ crypto_libbitcoin_crypto_a_CXXFLAGS = $(AM_CXXFLAGS) $(PIE_FLAGS)
 crypto_libbitcoin_crypto_a_SOURCES = \
   crypto/aes.cpp \
   crypto/aes.h \
+  crypto/balloon-aes.c \
+  crypto/balloon-aes.h \
+  crypto/balloon-evp.c \
+  crypto/balloon-evp.h \
   crypto/balloon.h \
   crypto/chacha20.h \
   crypto/chacha20.cpp \

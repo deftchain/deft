@@ -13,7 +13,7 @@
 uint256 CBlockHeader::GetHash() const
 {
     uint256 outHash;
-    balloon_hash ((unsigned char *)BEGIN(nVersion), (unsigned char *)BEGIN(outHash), 128, 4);
+    balloon_hash ((unsigned char *)BEGIN(nVersion), (unsigned char *)BEGIN(outHash));
     return outHash;
 }
 
